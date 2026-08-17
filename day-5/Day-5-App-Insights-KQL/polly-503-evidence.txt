@@ -1,0 +1,9 @@
+Polly resilience evidence
+
+Azure Container Apps logs captured:
+- HTTP response status code: 503
+- HTTP method: GET
+- Route: /test/transient-failure
+- The route matched successfully.
+
+Important: the captured console output does not expose the custom "POLLY RETRY" log lines, so this evidence does not claim that those messages were visible. It demonstrates the intentional transient 503 failure and the instrumented route telemetry.
