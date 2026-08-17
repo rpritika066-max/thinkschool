@@ -1,0 +1,122 @@
+name: Consolidate ThinkSchool Days
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout thinkschool
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Clone source task repositories
+        run: |
+          git clone --no-tags https://github.com/rpritika066-max/day-1-piece-2.git /tmp/day-1-piece-2
+          git -C /tmp/day-1-piece-2 fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git clone --depth 1 --no-tags https://github.com/rpritika066-max/Day-2.git /tmp/day-2-repo
+
+      - name: Build consolidated day folders
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Keep the existing Day-1 starter work (hello-cs/hello-ts), and add
+          # the complete Day-1 refactoring work from day-1-piece-2/main.
+          mkdir -p day-1 day-2 day-3 day-4 day-5
+
+          git -C /tmp/day-1-piece-2 archive --format=tar origin/main original refactored tests | tar -xf - -C day-1
+          git -C /tmp/day-1-piece-2 show origin/main:REFACTOR_NOTES.md > day-1/REFACTOR_NOTES.md
+
+          # Day-2 is sourced from the dedicated Day-2 repository. Its repo has
+          # a Day-2 wrapper directory, so strip that outer directory here.
+          git -C /tmp/day-2-repo archive --format=tar origin/main Day-2 | tar -xf - --strip-components=1 -C day-2
+
+          # Days 3-5 are consolidated from the main source repository.
+          for day in Day-3 Day-4 Day-5; do
+            target="day-${day#Day-}"
+            rm -rf "$target"/* "$target"/.[!.]* "$target"/..?* 2>/dev/null || true
+            git -C /tmp/day-1-piece-2 archive --format=tar origin/main "$day" | tar -xf - --strip-components=1 -C "$target"
+          done
+
+          # Preserve task-branch evidence inside the appropriate day folder.
+          # This captures files introduced by task branches without polluting
+          # the final daily snapshot with unrelated earlier-day files.
+          capture_branch_changes() {
+            local branch="$1"
+            local target_day="$2"
+            local repo=/tmp/day-1-piece-2
+            local remote="origin/$branch"
+
+            if ! git -C "$repo" rev-parse --verify "$remote" >/dev/null 2>&1; then
+              return 0
+            fi
+
+            local base
+            base="$(git -C "$repo" merge-base origin/main "$remote")"
+
+            while IFS= read -r -d '' path; do
+              if git -C "$repo" cat-file -e "$remote:$path" 2>/dev/null; then
+                local out="${target_day}/branch-evidence/${branch}/${path}"
+                mkdir -p "$(dirname "$out")"
+                git -C "$repo" show "$remote:$path" > "$out"
+              fi
+            done < <(git -C "$repo" diff --name-only -z --diff-filter=ACMRT "$base" "$remote")
+          }
+
+          # Day-1 task branches
+          for branch in day1-task1 day1-piece2-refactor day1-piece3-ai-refactor day1-piece4-domain-model; do
+            capture_branch_changes "$branch" day-1
+          done
+
+          # Day-2 task branches that still exist in the source repository.
+          for branch in day2 day2-di-dependency-injection; do
+            capture_branch_changes "$branch" day-2
+          done
+
+          # Day-3
+          capture_branch_changes day3-task1 day-3
+
+          # Day-4
+          for branch in day4-ci day4-opentelemetry day4-serilog; do
+            capture_branch_changes "$branch" day-4
+          done
+
+          # Day-5
+          for branch in day5-appinsights-kql day5-appinsights-kql-exercise day5-diagnose-slow-endpoint day5-evidence-upload day5-piece2; do
+            capture_branch_changes "$branch" day-5
+          done
+
+          cat > CONSOLIDATION.md <<'EOF'
+# ThinkSchool Cohort Consolidation
+
+This repository is the single consolidated submission repository for the ThinkSchool cohort.
+
+## Structure
+
+- `day-1/` — Day 1 refactoring work, including the original/refactored code, tests, notes, existing starter tasks, and task-branch evidence.
+- `day-2/` — Day 2 work sourced from the dedicated `Day-2` repository, plus available Day-2 branch evidence.
+- `day-3/` — Day 3 work from `day-1-piece-2`, plus available Day-3 branch evidence.
+- `day-4/` — Day 4 work from `day-1-piece-2`, plus CI/Serilog/OpenTelemetry branch evidence.
+- `day-5/` — Day 5 work from `day-1-piece-2`, plus App Insights, slow-endpoint, evidence-upload, and Piece-2 branch evidence.
+
+The daily folders contain the consolidated snapshots. `branch-evidence/` keeps task-branch-specific changes auditable without mixing them into the final daily snapshots.
+EOF
+
+          git add day-1 day-2 day-3 day-4 day-5 CONSOLIDATION.md .github/workflows/consolidate-days.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: consolidate ThinkSchool work by day"
+
+          # Remove the one-shot consolidation workflow so it does not remain as
+          # permanent project infrastructure.
+          git rm .github/workflows/consolidate-days.yml
+          git commit -m "chore: remove one-shot consolidation workflow"
+          git push origin main
